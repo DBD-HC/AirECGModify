@@ -142,7 +142,7 @@ class DiTBlock_CrossAttention_LN(nn.Module):
         self.crossAtten = CrossAttention(hidden_size, context_dim=None, heads=num_heads, dim_head=hidden_size//num_heads)
         self.norm3 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        approx_gelu = lambda: nn.GELU()
         self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
 
         self.adaLN_modulation = nn.Sequential(
