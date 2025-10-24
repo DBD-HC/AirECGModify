@@ -451,6 +451,7 @@ def main(args, train_dataloader, test_dataloader):
                 samples = samples.reshape(n, 1, 1024)
                 ref = ref.reshape(n, 1, 1024)
                 visualize_gen_curves(samples[0, 0], ecg[0, 0], viz, win=f'gen_ecg_val', title=f'gen ecg val')
+                break
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
 
@@ -512,7 +513,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--mmWave-channels", type=int, default=50)
-    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--epochs", type=int, default=1400)
     parser.add_argument("--global-batch-size", type=int, default=64)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -524,8 +525,6 @@ if __name__ == "__main__":
     pcc_list = []
 
     for test_user in user:
-        if test_user < 3:
-            continue
         train_users = [j for j in user if j != test_user]
         temp_pcc = cross_domain(args, domain=1, train_index=train_users, test_index=[test_user],
                                 data_spliter=MMECGDataSpliter(rand_ref=True))

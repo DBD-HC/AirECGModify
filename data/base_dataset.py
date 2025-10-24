@@ -20,6 +20,11 @@ class RadarDataset(Dataset):
         self.data_root = data_root
         self.transform = base_transform if transform is None else transform
         self.rand_ref = rand_ref
+        self.user_ecg_file = [[] for _ in range(20)]
+        for fn in ref_filenames:
+            inf = fn.split('_')
+            user = int(inf[1][1:])
+            self.user_ecg_file[user].append(fn)
 
     def preprocessing_radar(self, radar_data):
         return radar_data
@@ -40,21 +45,30 @@ class RadarDataset(Dataset):
 
     def __getitem__(self, index):
         d = np.load(os.path.join(self.data_root, self.radar_filenames[index]))
-        if self.rand_ref:
-            rand_idx = np.random.randint(len(self.ref_filenames))
-            ecg = np.load(os.path.join(self.data_root, self.ref_filenames[rand_idx]))
-        else:
-            ecg = np.load(os.path.join(self.data_root, self.ref_filenames[index]))
-        ref_ecg_filename = self.get_ref_ecg(index)
-        ref_ecg = np.load(os.path.join(self.data_root, ref_ecg_filename))
+
+        ecg_filename = self.get_ref_ecg(index)
+        ecg = np.load(os.path.join(self.data_root, ecg_filename))
         d = self.preprocessing_radar(d)
-        ref_ecg = self.preprocessing_ref(ref_ecg)
         ecg = self.preprocessing_ref(ecg)
-        d, ecg = self.transform(d, ecg)
-        d, ecg, ref_ecg = to_tensor(d, ecg, ref_ecg)
+
+        if self.rand_ref:
+
+            inf = ecg_filename.split('_')
+            user = int(inf[1][1:])
+            while True:
+                ref_ecg_filename = np.random.choice(self.user_ecg_file[user])
+                if ref_ecg_filename != ecg_filename:
+                    break
+            # ecg_u{user}_st{status}_s{sample}.npy
+            ref_ecg = np.load(os.path.join(self.data_root, ecg_filename))
+        else:
+            ref_ecg = np.load(os.path.join(self.data_root, self.ref_filenames[index]))
+        ref_ecg = self.preprocessing_ref(ref_ecg)
+        d, ref_ecg = self.transform(d, ref_ecg)
+        d, ref_ecg, ecg = to_tensor(d, ref_ecg, ecg)
         d = self.resample(d)
-        ecg = self.resample(ecg)
         ref_ecg = self.resample(ref_ecg)
+        ecg = self.resample(ecg)
         return d, ecg, ref_ecg
 
     def __len__(self):

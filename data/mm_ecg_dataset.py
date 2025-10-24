@@ -178,8 +178,8 @@ class MMECGDataSpliter(DataSpliter):
         data = super(MMECGDataSpliter, self).split_data(domain, train_idx, test_idx, need_val)
         tr_radar, tr_ref, vl_radar, vl_ref, te_radar, te_ref = data
         return MMECGDataset(tr_radar, tr_ref, self.train_transform, self.data_root, self.rand_ref), \
-               MMECGDataset(vl_radar, vl_ref, self.val_transform, self.data_root, False), \
-               MMECGDataset(te_radar, te_ref, self.val_transform, self.data_root, False)
+               MMECGDataset(vl_radar, vl_ref, self.val_transform, self.data_root, self.rand_ref), \
+               MMECGDataset(te_radar, te_ref, self.val_transform, self.data_root, self.rand_ref)
 
 
 if __name__ == '__main__':
