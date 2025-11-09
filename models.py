@@ -153,7 +153,7 @@ class DiTBlock_CrossAttention_LN(nn.Module):
     def forward(self, x, c, t):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(t).chunk(6, dim=1)
         x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
-        x = x + self.crossAtten(self.norm2(x), c)
+        # x = x + self.crossAtten(self.norm2(x), c)
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm3(x), shift_mlp, scale_mlp))
         return x
 
@@ -308,11 +308,11 @@ class DiT(nn.Module):
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
         y1 = self.y_embedder1(y1) + self.pos_embed
-        y2 = self.y_embedder2(y2) + self.pos_embed    # (N, D)
+        # y2 = self.y_embedder2(y2) + self.pos_embed    # (N, D)
 
         x = x + y1
         for block in self.blocks:
-            x = block(x, y2, t)                      # (N, T, D)
+            x = block(x, None, t)                      # (N, T, D)
         x = self.final_layer(x, t)                # (N, T, patch_size ** 2 * out_channels)
         x = self.unpatchify(x)                   # (N, out_channels, H, W)
         return x
@@ -382,5 +382,5 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #################################################################################
 
 def AirECG_model(**kwargs):
-    return DiT(depth=6, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
+    return DiT(depth=6, hidden_size=768, patch_size=2, num_heads=6, **kwargs)
 

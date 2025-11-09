@@ -60,7 +60,7 @@ class RadarDataset(Dataset):
                 if ref_ecg_filename != ecg_filename:
                     break
             # ecg_u{user}_st{status}_s{sample}.npy
-            ref_ecg = np.load(os.path.join(self.data_root, ecg_filename))
+            ref_ecg = np.load(os.path.join(self.data_root, ref_ecg_filename))
         else:
             ref_ecg = np.load(os.path.join(self.data_root, self.ref_filenames[index]))
         ref_ecg = self.preprocessing_ref(ref_ecg)

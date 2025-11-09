@@ -362,7 +362,7 @@ def main(args, train_dataloader, test_dataloader):
         # sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
         model.train()
-        for batch_idx, (mmwave, ecg, ref) in enumerate(tqdm(train_dataloader)):
+        for batch_idx, (mmwave, ecg, ref) in enumerate(train_dataloader):
             n = ecg.shape[0]
             ecg = ecg.to(device)
             mmwave = mmwave.to(device)
@@ -422,9 +422,9 @@ def main(args, train_dataloader, test_dataloader):
                 if use_ddp:
                     dist.barrier()
 
-        if (epoch + 1) % 30 == 0:
+        if (epoch + 1) % 200 == 0:
             model.eval()
-            for batch_idx, (mmwave, ecg, ref) in enumerate(tqdm(test_dataloader)):
+            for batch_idx, (mmwave, ecg, ref) in enumerate(test_dataloader):
                 mmwave = mmwave[0:16]
                 ecg = ecg[0:16]
                 ref = ref[0:16]
@@ -443,20 +443,59 @@ def main(args, train_dataloader, test_dataloader):
                     model_forward = model.forward
 
                 samples = diffusion.p_sample_loop(
-                    model_forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True,
+                    model_forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False,
                     device=device
                 )
 
                 ecg = ecg.reshape(n, 1, 1024)
                 samples = samples.reshape(n, 1, 1024)
                 ref = ref.reshape(n, 1, 1024)
-                visualize_gen_curves(samples[0, 0], ecg[0, 0], viz, win=f'gen_ecg_val', title=f'gen ecg val')
+                visualize_gen_curves(samples[0, 0], ecg[0, 0], viz, win=f'gen_ecg_val', title=f'gen ecg val airecg')
                 break
+            pcc_list = []
+            for batch_idx, (mmwave, ecg, ref) in enumerate(test_dataloader):
+                mmwave = mmwave
+                ecg = ecg
+                ref = ref
+                n = ecg.shape[0]
+                mmwave = mmwave.to(device)
+                ref = ref.to(device)
+                ecg = ecg.to(device)
+
+                z = torch.randn(n, 1, latent_size, latent_size, device=device)
+                # Setup guidance:
+
+                model_kwargs = dict(y1=mmwave, y2=ref)
+                # Sample images:
+                if use_ddp:
+                    model_forward = model.module.forward
+                else:
+                    model_forward = model.forward
+
+                samples = diffusion.p_sample_loop(
+                    model_forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False,
+                    device=device
+                )
+
+                # mmwave = mmwave.reshape(n, in_channels, 1024)[:, 0, :]
+                ecg = ecg.reshape(n, 1, 1024)
+                samples = samples.reshape(n, 1, 1024)
+                # ref = ref.reshape(n, 1, 1024)
+                visualize_gen_curves(samples[0, 0], ecg[0, 0], viz, win=f'gen_ecg_test',
+                                     title=f'gen ecg test airecg')
+                # mmwave = mmwave.cpu().numpy()
+                # ecg = ecg.cpu().numpy()
+                # samples = samples.cpu().numpy()
+                # sample_images(ref, mmwave, ecg, samples, batch_idx, f"{checkpoint_dir}/{train_steps:07d}_test.jpg")
+                pcc, _ = batch_max_pearson_corr(ecg, samples, dim=-1, max_lag=100)
+                pcc_list.extend([x.item() for x in pcc])
+            mean_pcc = torch.tensor(pcc_list).mean()
+            logger.info(f"Epoch {epoch} test pcc {mean_pcc:.4f}")
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
 
     pcc_list = []
-    for batch_idx, (mmwave, ecg, ref) in enumerate(tqdm(test_dataloader)):
+    for batch_idx, (mmwave, ecg, ref) in enumerate(test_dataloader):
         mmwave = mmwave
         ecg = ecg
         ref = ref
@@ -476,7 +515,7 @@ def main(args, train_dataloader, test_dataloader):
             model_forward = model.forward
 
         samples = diffusion.p_sample_loop(
-            model_forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True,
+            model_forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False,
             device=device
         )
 
@@ -484,14 +523,14 @@ def main(args, train_dataloader, test_dataloader):
         ecg = ecg.reshape(n, 1, 1024)
         samples = samples.reshape(n, 1, 1024)
         ref = ref.reshape(n, 1, 1024)
-        visualize_gen_curves(samples[0, 0], ecg[0, 0], viz, win=f'gen_ecg_val',
-                             title=f'gen ecg val')
+        visualize_gen_curves(samples[0, 0], ecg[0, 0], viz, win=f'gen_ecg_test',
+                             title=f'gen ecg test airecg')
         # mmwave = mmwave.cpu().numpy()
         # ecg = ecg.cpu().numpy()
         # samples = samples.cpu().numpy()
         # sample_images(ref, mmwave, ecg, samples, batch_idx, f"{checkpoint_dir}/{train_steps:07d}_test.jpg")
-        pcc, _ = batch_max_pearson_corr(ecg, samples, dim=-1, max_lag=50)
-    pcc_list.extend([x.item() for x in pcc])
+        pcc, _ = batch_max_pearson_corr(ecg, samples, dim=-1, max_lag=100)
+        pcc_list.extend([x.item() for x in pcc])
     mean_pcc = torch.tensor(pcc_list).mean()
     print(pcc)
     logger.info("Done!")
@@ -513,7 +552,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--mmWave-channels", type=int, default=50)
-    parser.add_argument("--epochs", type=int, default=1400)
+    parser.add_argument("--epochs", type=int, default=700)
     parser.add_argument("--global-batch-size", type=int, default=64)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=4)

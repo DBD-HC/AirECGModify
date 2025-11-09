@@ -130,7 +130,7 @@ class MMECGDataset(RadarDataset):
 
 
 class MMECGDataSpliter(DataSpliter):
-    def __init__(self, data_root=curves_data_root, rand_ref=False, train_transform=rand_transform,
+    def __init__(self, data_root=curves_data_root, rand_ref=False, train_transform=base_transform,
                  val_transform=base_transform,
                  train_ratio=0.8, num_domain=4, n_fold=5):
         super().__init__(data_root, rand_ref, train_transform, val_transform, train_ratio, num_domain, n_fold)
