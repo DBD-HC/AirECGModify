@@ -422,7 +422,7 @@ def main(args, train_dataloader, test_dataloader):
                 if use_ddp:
                     dist.barrier()
 
-        if (epoch + 1) % 200 == 0:
+        if (epoch + 1) % 30 == 0:
             model.eval()
             for batch_idx, (mmwave, ecg, ref) in enumerate(test_dataloader):
                 mmwave = mmwave[0:16]
