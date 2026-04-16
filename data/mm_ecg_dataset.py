@@ -116,15 +116,15 @@ class MMECGDataset(RadarDataset):
         return ref_ecg
 
     def preprocessing_radar(self, radar_data):
-        radar_data = (radar_data - np.mean(radar_data, axis=0, keepdims=True)) / (
-                    np.std(radar_data, axis=0, keepdims=True) + 1e-9)
+        radar_data = (radar_data - np.mean(radar_data, keepdims=True)) / (
+                    np.std(radar_data, keepdims=True) + 1e-9)
         radar_data = radar_data.reshape(len(radar_data), -1)
         radar_data = np.transpose(radar_data, (1, 0))
         return radar_data
 
     def preprocessing_ref(self, ref_data):
-        ref_data = (ref_data - np.mean(ref_data, axis=0, keepdims=True)) / (
-                np.std(ref_data, axis=0, keepdims=True) + 1e-9)
+        ref_data = (ref_data - np.mean(ref_data, keepdims=True)) / (
+                np.std(ref_data, keepdims=True) + 1e-9)
         ref_data = np.transpose(ref_data, (1, 0))
         return ref_data
 
