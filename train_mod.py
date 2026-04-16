@@ -5,6 +5,8 @@ import numpy as np
 import torch
 import visdom
 
+from long_term_reconstruction import LRWrapper
+from result_collector import ResultCollector
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -23,7 +25,7 @@ from models import AirECG_model
 from diffusion import create_diffusion
 
 import matplotlib.pyplot as plt
-from data.mm_ecg_dataset import MMECGDataSpliter
+from data.mm_ecg_dataset2 import MMECGDataSpliter
 
 plt.rcParams['figure.figsize'] = 23, 15
 
@@ -270,7 +272,8 @@ def visualize_gen_curves(gen_curves, ref_curves, viz, win='curves', title='Gener
         )
     )
 
-def main(args, train_dataloader, test_dataloader):
+
+def train_phase(args, train_dataloader, val_dataloader, test_dataloader, viz):
     """
     Trains AirECG model.
     """
@@ -304,9 +307,8 @@ def main(args, train_dataloader, test_dataloader):
     # Setup an experiment folder:
     if rank == 0:
         os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
-        experiment_index = len(glob(f"{args.results_dir}/*"))
         model_string_name = 'AirECG'
-        experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
+        experiment_dir = f"{args.results_dir}/{model_string_name}"  # Create an experiment folder
         checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
         os.makedirs(checkpoint_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
@@ -355,8 +357,8 @@ def main(args, train_dataloader, test_dataloader):
     train_steps = 0
     log_steps = 0
     running_loss = 0
+    best_val_pcc = -1
     start_time = time()
-    viz = visdom.Visdom(env='cross domain', port=6006)
     logger.info(f"Training for {args.epochs} epochs...")
     for epoch in range(args.epochs):
         # sampler.set_epoch(epoch)
@@ -408,55 +410,14 @@ def main(args, train_dataloader, test_dataloader):
                 start_time = time()
 
             # Save DiT checkpoint:
-            if train_steps % args.ckpt_every == 0 and train_steps > 0:
-                if rank == 0:
-                    checkpoint = {
-                        "model": model.state_dict(),
-                        "ema": ema.state_dict(),
-                        "opt": opt.state_dict(),
-                        "args": args
-                    }
-                    checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
-                    torch.save(checkpoint, checkpoint_path)
-                    logger.info(f"Saved checkpoint to {checkpoint_path}")
-                if use_ddp:
-                    dist.barrier()
 
-        if (epoch + 1) % 200 == 0:
+        if (epoch + 1) % 10 == 0:
             model.eval()
-            for batch_idx, (mmwave, ecg, ref) in enumerate(test_dataloader):
+            pcc_list = []
+            for batch_idx, (mmwave, ecg, ref) in enumerate(val_dataloader):
                 mmwave = mmwave[0:16]
                 ecg = ecg[0:16]
                 ref = ref[0:16]
-                n = ecg.shape[0]
-                mmwave = mmwave.to(device)
-                ref = ref.to(device)
-
-                z = torch.randn(n, 1, latent_size, latent_size, device=device)
-                # Setup guidance:
-
-                model_kwargs = dict(y1=mmwave, y2=ref)
-                # Sample images:
-                if use_ddp:
-                    model_forward = model.module.forward
-                else:
-                    model_forward = model.forward
-
-                samples = diffusion.p_sample_loop(
-                    model_forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False,
-                    device=device
-                )
-
-                ecg = ecg.reshape(n, 1, 1024)
-                samples = samples.reshape(n, 1, 1024)
-                ref = ref.reshape(n, 1, 1024)
-                visualize_gen_curves(samples[0, 0], ecg[0, 0], viz, win=f'gen_ecg_val', title=f'gen ecg val airecg')
-                break
-            pcc_list = []
-            for batch_idx, (mmwave, ecg, ref) in enumerate(test_dataloader):
-                mmwave = mmwave
-                ecg = ecg
-                ref = ref
                 n = ecg.shape[0]
                 mmwave = mmwave.to(device)
                 ref = ref.to(device)
@@ -481,48 +442,79 @@ def main(args, train_dataloader, test_dataloader):
                 ecg = ecg.reshape(n, 1, 1024)
                 samples = samples.reshape(n, 1, 1024)
                 # ref = ref.reshape(n, 1, 1024)
-                visualize_gen_curves(samples[0, 0], ecg[0, 0], viz, win=f'gen_ecg_test',
-                                     title=f'gen ecg test airecg')
+                visualize_gen_curves(samples[0, 0], ecg[0, 0], viz, win=f'gen_ecg_val',
+                                     title=f'gen ecg cal airecg')
                 # mmwave = mmwave.cpu().numpy()
                 # ecg = ecg.cpu().numpy()
                 # samples = samples.cpu().numpy()
                 # sample_images(ref, mmwave, ecg, samples, batch_idx, f"{checkpoint_dir}/{train_steps:07d}_test.jpg")
                 pcc, _ = batch_max_pearson_corr(ecg, samples, dim=-1, max_lag=100)
                 pcc_list.extend([x.item() for x in pcc])
+                if batch_idx > 10:
+                    break
+
             mean_pcc = torch.tensor(pcc_list).mean()
-            logger.info(f"Epoch {epoch} test pcc {mean_pcc:.4f}")
+            logger.info(f"Epoch {epoch} val pcc {mean_pcc:.4f}")
+
+            if best_val_pcc < mean_pcc:
+                best_val_pcc = mean_pcc
+                if rank == 0:
+                    checkpoint = {
+                        "model": model.state_dict(),
+                        "ema": ema.state_dict(),
+                        "opt": opt.state_dict(),
+                        "args": args
+                    }
+                    checkpoint_path = f"{checkpoint_dir}/airecg.pt"
+                    torch.save(checkpoint, checkpoint_path)
+                    logger.info(f"Saved checkpoint to {checkpoint_path}")
+                if use_ddp:
+                    dist.barrier()
+
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
+    logger.info("Done!")
+    # cleanup()
+    return checkpoint_path
 
+
+def eval_phase(args, domain, test_index, data_splitter, test_dataloader, ck_path, viz, need_long_term_val=True):
     pcc_list = []
+    latent_size = 32
+    model = AirECG_model(
+        input_size=latent_size,
+        mm_channels=args.mmWave_channels,
+    )
+    state_dict = extract_model(ck_path)
+    model.load_state_dict(state_dict)
+    model.eval()  # important!
+    diffusion = create_diffusion(str(args.eval_num_sampling_steps))
+
     for batch_idx, (mmwave, ecg, ref) in enumerate(test_dataloader):
         mmwave = mmwave
         ecg = ecg
         ref = ref
         n = ecg.shape[0]
-        mmwave = mmwave.to(device)
-        ref = ref.to(device)
-        ecg = ecg.to(device)
+        mmwave = mmwave.cuda()
+        ref = ref.cuda()
+        ecg = ecg.cuda()
 
-        z = torch.randn(n, 1, latent_size, latent_size, device=device)
+        z = torch.randn(n, 1, latent_size, latent_size, device=ecg.device)
         # Setup guidance:
 
         model_kwargs = dict(y1=mmwave, y2=ref)
         # Sample images:
-        if use_ddp:
-            model_forward = model.module.forward
-        else:
-            model_forward = model.forward
+        model_forward = model.forward
 
         samples = diffusion.p_sample_loop(
             model_forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False,
-            device=device
+            device=ecg.device
         )
 
         # mmwave = mmwave.reshape(n, in_channels, 1024)[:, 0, :]
         ecg = ecg.reshape(n, 1, 1024)
         samples = samples.reshape(n, 1, 1024)
-        ref = ref.reshape(n, 1, 1024)
+        # ref = ref.reshape(n, 1, 1024)
         visualize_gen_curves(samples[0, 0], ecg[0, 0], viz, win=f'gen_ecg_test',
                              title=f'gen ecg test airecg')
         # mmwave = mmwave.cpu().numpy()
@@ -531,11 +523,46 @@ def main(args, train_dataloader, test_dataloader):
         # sample_images(ref, mmwave, ecg, samples, batch_idx, f"{checkpoint_dir}/{train_steps:07d}_test.jpg")
         pcc, _ = batch_max_pearson_corr(ecg, samples, dim=-1, max_lag=100)
         pcc_list.extend([x.item() for x in pcc])
-    mean_pcc = torch.tensor(pcc_list).mean()
-    print(pcc)
-    logger.info("Done!")
-    # cleanup()
-    return mean_pcc
+    test_pcc = torch.tensor(pcc_list).mean()
+    print(test_pcc)
+
+    if need_long_term_val:
+        # load_checkpoint(model, checkpoint_path)
+        lt_pcc_list = []
+        ref_ecg_list = []
+        gen_ecg_list = []
+        for idx in test_index:
+            pcc, ref_ecg, gen_ecg = long_term_validate(domain, idx, data_splitter, model, diffusion)
+            lt_pcc_list.append(pcc)
+            ref_ecg_list.append(ref_ecg)
+            gen_ecg_list.append(gen_ecg)
+        lt_pcc = torch.tensor(lt_pcc_list).mean()
+        ref_ecg_list = torch.cat(ref_ecg_list, dim=0)
+        gen_ecg_list = torch.cat(gen_ecg_list, dim=0)
+        print(f'[validation] long term pcc {lt_pcc}')
+
+    model.eval()  # important! This disables randomized embedding dropout
+    return test_pcc, ref_ecg_list, gen_ecg_list
+
+
+def long_term_validate(domain, index, data_splitter, model, diffusion):
+    radar_data, ref_data, pos_data = data_splitter.get_trails(domain, index)
+    radar_data = torch.from_numpy(radar_data).type(torch.float32).cuda()
+    ref_data = torch.from_numpy(ref_data).type(torch.float32).cuda()
+    pos_data = torch.from_numpy(pos_data).type(torch.float32).cuda()
+    ecg_reconstructor = LRWrapper(model.cuda(), diffusion, need_history=False)
+    recon_ecg, _ = ecg_reconstructor.radar2ecg(radar_data, None)
+    # recon_ecg = torch.nn.functional.interpolate(recon_ecg, size=ref_data.size(-1), mode='linear', align_corners=False)
+    overlap_len = ecg_reconstructor.overlap_len // 2
+    ref_data = ref_data[:, :, overlap_len: overlap_len + recon_ecg.size(-1)]
+    pcc, _ = batch_max_pearson_corr(ref_data, recon_ecg, dim=-1, max_lag=100)
+    pcc = torch.mean(pcc, dim=0)
+
+    recon_ecg = ecg_reconstructor.norm_ecg(recon_ecg)
+    ref_data = ecg_reconstructor.norm_ecg(ref_data)
+
+    return pcc, ref_data, recon_ecg
+
 
 def cross_domain(args, domain, train_index, test_index, data_spliter):
     viz = visdom.Visdom(env='cross domain', port=6006)
@@ -544,8 +571,9 @@ def cross_domain(args, domain, train_index, test_index, data_spliter):
     train_loader = get_dataloader(train_dataset, shuffle=True, collate_fn=None, batch_size=batch_size)
     val_loader = get_dataloader(val_dataset, shuffle=False, collate_fn=None, batch_size=batch_size)
     test_loader = get_dataloader(test_dataset, shuffle=False, collate_fn=None, batch_size=batch_size)
-    pcc = main(args, train_loader, test_loader)
-    return pcc
+    ck_path = train_phase(args, train_loader, val_loader, test_loader, viz)
+    pcc, ref_ecg, gen_ecg = eval_phase(args, domain, test_index, data_spliter, test_loader, ck_path, viz)
+    return pcc, ref_ecg, gen_ecg
 
 
 if __name__ == "__main__":
@@ -553,7 +581,8 @@ if __name__ == "__main__":
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--mmWave-channels", type=int, default=50)
     parser.add_argument("--epochs", type=int, default=700)
-    parser.add_argument("--global-batch-size", type=int, default=64)
+    parser.add_argument("--global-batch-size", type=int, default=32)
+    parser.add_argument("--eval-num-sampling-steps", type=int, default=100)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--log-every", type=int, default=322)
@@ -562,10 +591,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
     user = [i for i in range(11)]
     pcc_list = []
-
+    domain = 1
+    res_collector = ResultCollector(-1, domain, len(user))
     for test_user in user:
         train_users = [j for j in user if j != test_user]
-        temp_pcc = cross_domain(args, domain=1, train_index=train_users, test_index=[test_user],
-                                data_spliter=MMECGDataSpliter(rand_ref=True))
+        temp_pcc, f_ref_ecg, f_gen_ecg = cross_domain(args, domain=domain, train_index=train_users,
+                                                      test_index=[test_user],
+                                                      data_spliter=MMECGDataSpliter(rand_ref=True, need_align=True))
         pcc_list.append(temp_pcc)
         print(pcc_list)
+        res_collector.model_name = f'airecg_d{domain}_t{test_user}'
+
+        res = res_collector.get_result(f_ref_ecg, f_gen_ecg, fold=test_user, epoch='best')
+        print(res)
