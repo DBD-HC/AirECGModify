@@ -1,7 +1,7 @@
 import os
 
-from utils.ecg_radar_align import batch_max_pearson_corr, align_ecg_radar
-from utils.matrices import ECGPhysioMetrics
+from ecg_radar_align import batch_max_pearson_corr, align_ecg_radar
+from matrices import ECGPhysioMetrics
 import pandas as pd
 
 
@@ -69,7 +69,10 @@ class ResultCollector:
         # ECG physio metrics
         # -------------------------
         for k, v in mt.items():
-            self.result[str(epoch)][fold][k] = round(float(v) * 1000.0, 1)
+            if k.endswith('pct') or k.endswith('rate') or k == 'RMSE':
+                self.result[str(epoch)][fold][k] = round(float(v), 2)
+            else:
+                self.result[str(epoch)][fold][k] = round(float(v) * 1000.0, 1)
 
         return self.result[str(epoch)][fold]
 
