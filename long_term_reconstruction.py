@@ -19,12 +19,12 @@ class LRWrapper:
     @staticmethod
     def up_sample(data, size=1024):
         data = F.interpolate(data, size=size, mode='linear', align_corners=False)
-        data = data.view(..., 32, 32)
+        data = data.view(data.size(0), data.size(1), 32, 32)
         return data
 
     @staticmethod
     def down_sample(data, size=1000):
-        data = data.view(..., 1024)
+        data.view(data.size(0), data.size(1), -1)
         data = F.interpolate(data, size=size, mode='linear', align_corners=False)
         return data
 
@@ -68,10 +68,10 @@ class LRWrapper:
                 z = torch.randn(temp_radar.size(0), 1, 32, 32, device=temp_radar.device)
                 # Setup guidance:
 
-                model_kwargs = dict(y1=temp_radar)
+                model_kwargs = dict(y1=temp_radar, y2=None)
                 # Sample images:
                 samples = self.diffusion.p_sample_loop(
-                    self.model.forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True,
+                    self.model.forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False,
                     device=temp_radar.device
                 )
                 samples = samples.reshape(z.size(0), 1, 1024)

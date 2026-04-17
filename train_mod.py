@@ -411,53 +411,14 @@ def train_phase(args, train_dataloader, val_dataloader, test_dataloader, viz):
 
             # Save DiT checkpoint:
 
-        if (epoch + 1) % 10 == 0:
-            model.eval()
-            pcc_list = []
-            for batch_idx, (mmwave, ecg, ref) in enumerate(val_dataloader):
-                mmwave = mmwave[0:16]
-                ecg = ecg[0:16]
-                ref = ref[0:16]
-                n = ecg.shape[0]
-                mmwave = mmwave.to(device)
-                ref = ref.to(device)
-                ecg = ecg.to(device)
+        if (epoch + 1) % 30 == 0:
+            val_pcc, _, _ = eval_phase(args, need_long_term_val=False, model=model, test_dataloader=val_dataloader,
+                                       viz=viz, mode='val')
+            # mean_pcc = torch.tensor(pcc_list).mean()
+            logger.info(f"Epoch {epoch} val pcc {val_pcc:.4f}")
 
-                z = torch.randn(n, 1, latent_size, latent_size, device=device)
-                # Setup guidance:
-
-                model_kwargs = dict(y1=mmwave, y2=ref)
-                # Sample images:
-                if use_ddp:
-                    model_forward = model.module.forward
-                else:
-                    model_forward = model.forward
-
-                samples = diffusion.p_sample_loop(
-                    model_forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False,
-                    device=device
-                )
-
-                # mmwave = mmwave.reshape(n, in_channels, 1024)[:, 0, :]
-                ecg = ecg.reshape(n, 1, 1024)
-                samples = samples.reshape(n, 1, 1024)
-                # ref = ref.reshape(n, 1, 1024)
-                visualize_gen_curves(samples[0, 0], ecg[0, 0], viz, win=f'gen_ecg_val',
-                                     title=f'gen ecg cal airecg')
-                # mmwave = mmwave.cpu().numpy()
-                # ecg = ecg.cpu().numpy()
-                # samples = samples.cpu().numpy()
-                # sample_images(ref, mmwave, ecg, samples, batch_idx, f"{checkpoint_dir}/{train_steps:07d}_test.jpg")
-                pcc, _ = batch_max_pearson_corr(ecg, samples, dim=-1, max_lag=100)
-                pcc_list.extend([x.item() for x in pcc])
-                if batch_idx > 10:
-                    break
-
-            mean_pcc = torch.tensor(pcc_list).mean()
-            logger.info(f"Epoch {epoch} val pcc {mean_pcc:.4f}")
-
-            if best_val_pcc < mean_pcc:
-                best_val_pcc = mean_pcc
+            if best_val_pcc < val_pcc:
+                best_val_pcc = val_pcc
                 if rank == 0:
                     checkpoint = {
                         "model": model.state_dict(),
@@ -475,18 +436,20 @@ def train_phase(args, train_dataloader, val_dataloader, test_dataloader, viz):
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
     logger.info("Done!")
     # cleanup()
-    return checkpoint_path
+    return f"{checkpoint_dir}/airecg.pt"
 
 
-def eval_phase(args, domain, test_index, data_splitter, test_dataloader, ck_path, viz, need_long_term_val=True):
+def eval_phase(args, domain=None, test_index=None, data_splitter=None, test_dataloader=None, ck_path=None, viz=None,
+               model=None, need_long_term_val=True, mode='test'):
     pcc_list = []
     latent_size = 32
-    model = AirECG_model(
-        input_size=latent_size,
-        mm_channels=args.mmWave_channels,
-    )
-    state_dict = extract_model(ck_path)
-    model.load_state_dict(state_dict)
+    if model is None and ck_path is not None:
+        model = AirECG_model(
+            input_size=latent_size,
+            mm_channels=args.mmWave_channels,
+        ).cuda()
+        state_dict = extract_model(ck_path)
+        model.load_state_dict(state_dict)
     model.eval()  # important!
     diffusion = create_diffusion(str(args.eval_num_sampling_steps))
 
@@ -515,8 +478,8 @@ def eval_phase(args, domain, test_index, data_splitter, test_dataloader, ck_path
         ecg = ecg.reshape(n, 1, 1024)
         samples = samples.reshape(n, 1, 1024)
         # ref = ref.reshape(n, 1, 1024)
-        visualize_gen_curves(samples[0, 0], ecg[0, 0], viz, win=f'gen_ecg_test',
-                             title=f'gen ecg test airecg')
+        visualize_gen_curves(samples[0, 0], ecg[0, 0], viz, win=f'gen_ecg_{mode}',
+                             title=f'gen ecg {mode} airecg')
         # mmwave = mmwave.cpu().numpy()
         # ecg = ecg.cpu().numpy()
         # samples = samples.cpu().numpy()
@@ -524,13 +487,13 @@ def eval_phase(args, domain, test_index, data_splitter, test_dataloader, ck_path
         pcc, _ = batch_max_pearson_corr(ecg, samples, dim=-1, max_lag=100)
         pcc_list.extend([x.item() for x in pcc])
     test_pcc = torch.tensor(pcc_list).mean()
-    print(test_pcc)
 
+    lt_pcc_list = []
+    ref_ecg_list = []
+    gen_ecg_list = []
     if need_long_term_val:
         # load_checkpoint(model, checkpoint_path)
-        lt_pcc_list = []
-        ref_ecg_list = []
-        gen_ecg_list = []
+
         for idx in test_index:
             pcc, ref_ecg, gen_ecg = long_term_validate(domain, idx, data_splitter, model, diffusion)
             lt_pcc_list.append(pcc)
